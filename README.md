@@ -19,22 +19,32 @@ The repository includes detailed installation instructions and requirements, scr
 + torch == 1.12.1
 + scanpy == 1.9.1
 
-<!-- Topic_gene_embedding -->
+Topic_gene_embedding
 
 ## 3 Usage
 
 ### Data format
 
-sICTA requires cell-gene matrix and cell type marker information to be entered in `.h5ad` object format.
+sICTA requires cell-by-cell-gene matrix and cell type information to be entered in csv object format.
+We provide default data for users to understand and debug sICTA code.
 
-### Training
+### Installation and implementation
 
+**Installation via github:**
+
+Download sICTA via github clone, you can run it directly by main.py file.
 ```bash
 python main.py
 ```
 
-We provide default data for users to understand and debug sICTA code.
+**Installation via PyPI:**
 
+After installing and importing sICTA via PyPI, a notebook tutorial can be found at tutorial.ipynb.
+```bash
+python -m venv sICTA-env
+source sICTA-env/bin/activate 
+pip install sICTA
+```
 
 ## Reference
 

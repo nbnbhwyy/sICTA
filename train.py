@@ -20,9 +20,9 @@ import platform
 import torch.nn.functional as F
 from .sICTA_model import *#scTrans_model as create_model
 from .sICTA_model import scTrans_model as create_model
-from sklearn.metrics import f1_score,precision_recall_fscore_support
+from sklearn.metrics import f1_score, precision_score, recall_score, precision_recall_fscore_support
     
-def f1(y_true, y_pred):
+def f1_m(y_true, y_pred):
     y_true = y_true.astype(np.int64)
     assert y_pred.size == y_true.size
     precision_macro, recall_macro, f1_macro, _ = precision_recall_fscore_support(y_true, y_pred, average='macro')
@@ -50,11 +50,9 @@ class MyDataSet(Dataset):
     def __len__(self):
         return self.len
   
-def get_gmt(gmt):
-    import pathlib
-    root = pathlib.Path(__file__).parent
+def get_gmt(gmt,current_path):
     gmt_files = {
-        "human_gobp": [root / "data/GO_bp.gmt"],
+        "human_gobp": [current_path + "/data/GO_bp.gmt"],
     }
     return gmt_files[gmt][0]
 
@@ -177,21 +175,21 @@ def evaluate(model, data_loader, device, epoch):
             attn_weights_all = np.concatenate(((attn_weights_all),(attn_weights.cpu().numpy())),axis=0)
     return latent_all, pred_all, attn_weights_all
 
-def fit_model(adata, gmt_path, project = None, pre_weights='', label_name='Celltype',max_g=300,max_gs=300, mask_ratio = 0.015,n_unannotated = 1,batch_size=64, embed_dim=48,depth=2,num_heads=4,lr=0.005, epochs= 10, lrf=0.01):
-    GLOBAL_SEED = 1
-    set_seed(GLOBAL_SEED)  
+def fit_model(adata, gmt_path, current_path = None, project = None, pre_weights='', label_name='Celltype',max_g=300,max_gs=300, mask_ratio = 0.015,n_unannotated = 1,batch_size=64, embed_dim=48,depth=2,num_heads=4,lr=0.005, epochs= 10, lrf=0.01):
+    # GLOBAL_SEED = 1
+    # set_seed(GLOBAL_SEED)  
     device = 'cuda:2'
     device = torch.device(device if torch.cuda.is_available() else "cpu")  #设置种子和cuda
     print(device)
     today = time.strftime('%Y%m%d',time.localtime(time.time()))
-    #train_weights = os.getcwd()+"/weights%s"%today
+    since = time.time()
     project = project or gmt_path.replace('.gmt','')+'_%s'%today
-    project_path = os.getcwd()+'/%s'%project
+
+    project_path = current_path+'/%s'%project
     if os.path.exists(project_path) is False:
         os.makedirs(project_path)
     tb_writer = SummaryWriter()
-    inverse, genes = set(adata.obs[label_name]), adata.var_names
-
+    inverse, genes = set(adata.obs[label_name]), [value.upper() for value in adata.var_names]
 
     if gmt_path is None:
         mask = np.random.binomial(1,mask_ratio,size=(len(genes), max_gs))
@@ -204,7 +202,7 @@ def fit_model(adata, gmt_path, project = None, pre_weights='', label_name='Cellt
         if '.gmt' in gmt_path:
             gmt_path = gmt_path
         else:
-            gmt_path = get_gmt(gmt_path)
+            gmt_path = get_gmt(gmt_path,current_path)
         reactome_dict = read_gmt(gmt_path, min_g=0, max_g=max_g)
         mask,pathway = create_pathway_mask(feature_list=genes,
                                           dict_pathway=reactome_dict,
@@ -217,14 +215,15 @@ def fit_model(adata, gmt_path, project = None, pre_weights='', label_name='Cellt
         print('Mask loaded!')
 
     np.save(project_path+'/mask.npy',mask)
-    pd.DataFrame(pathway).to_csv(project_path+'/pathway_fin.csv') 
-    pd.DataFrame(inverse,columns=[label_name]).to_csv(project_path+'/label_dictionary_fin.csv', quoting=None)
+    pd.DataFrame(pathway).to_csv(project_path+'/pathway.csv') 
+    pd.DataFrame(inverse,columns=[label_name]).to_csv(project_path+'/label_dictionary.csv', quoting=None)
 
     num_classes = len(set(adata.obs["broad_cell_type"])) #np.int64(torch.max(label_train)+1)
 
     expdata = adata.X
 
     model = create_model(num_classes=num_classes, num_genes=len(expdata[0]),  mask = mask,embed_dim=embed_dim,depth=depth,num_heads=num_heads,has_logits=False).to(device) 
+    print(sum(p.numel() for p in model.parameters()))
     print(pre_weights+'\n')
     if pre_weights != "":
         assert os.path.exists(pre_weights), "pre_weights file: '{}' not exist.".format(pre_weights)
@@ -233,10 +232,10 @@ def fit_model(adata, gmt_path, project = None, pre_weights='', label_name='Cellt
 
     print('Model builded!')
     pg = [p for p in model.parameters() if p.requires_grad]  
+    
 
-
-    for epoch in range(epochs):
-
+    for epoch in range(20):
+            
         if epoch<20:
             optimizer = optim.Adam(pg, lr=0.0001, weight_decay=1E-5) 
 
@@ -252,31 +251,43 @@ def fit_model(adata, gmt_path, project = None, pre_weights='', label_name='Cellt
                                         device=device,
                                         epoch=epoch)
             print(train_loss)
-        else:
-            optimizer = optim.Adam(pg, lr=0.000001, weight_decay=1E-7) 
-            
-            if epoch%1 == 0:
-             #   list_index =[]
-                test_dataset = MyDataSet(expdata, adata.uns['Celltype_soft'])
-                data_loader = torch.utils.data.DataLoader(test_dataset,
-                                                        batch_size=batch_size,
-                                                        shuffle=False,
-                                                        pin_memory=True,drop_last=False)             
-                latent_all, pre_all, attn_weights_all = evaluate(model=model,
-                                            data_loader=data_loader,
-                                            device=device,
-                                            epoch=epoch)    
+            tags = ["train_loss", "train_acc", "val_loss", "val_acc", "learning_rate"]
+            tb_writer.add_scalar(tags[0], train_loss, epoch)
+            tb_writer.add_scalar(tags[1], train_acc, epoch)
+            tb_writer.add_scalar(tags[4], optimizer.param_groups[0]["lr"], epoch)
 
 
-                data_norm = F.softmax(torch.from_numpy(pre_all),dim=1).numpy()
+    optimizer = optim.Adam(pg, lr=0.00001, weight_decay=1E-7) 
+   # scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1,gamma = 0.8)
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=5,gamma = 0.8)
+    for epoch in range(30):
+
+            test_dataset = MyDataSet(expdata, adata.uns['Celltype_soft'])
+            data_loader = torch.utils.data.DataLoader(test_dataset,
+                                                    batch_size=batch_size,
+                                                    shuffle=False,
+                                                    pin_memory=True,drop_last=False)             
+            latent_all, pre_all, attn_weights_all = evaluate(model=model,
+                                        data_loader=data_loader,
+                                        device=device,
+                                        epoch=epoch)    
 
 
-                y_pre = torch.max(torch.from_numpy(data_norm), dim=1)[1].numpy()
-                (precision_macro, recall_macro, f1_macro), (precision_micro, recall_micro, f1_micro)= np.round(f1(np.array(adata.obs[label_name]), np.array(y_pre)), 5) 
-                print('--------------------')
-                print('F1 score: f1_macro = {}, f1_micro = {}'.format(f1_macro, f1_micro))
-                print('precision score: precision_macro = {}, precision_micro = {}'.format(precision_macro, precision_micro))
-                print('recall score: recall_macro = {}, recall_micro = {}'.format(recall_macro, recall_micro))
+            data_norm = F.softmax(torch.from_numpy(pre_all),dim=1).numpy()
+            y_pre = torch.max(torch.from_numpy(data_norm), dim=1)[1].numpy()
+
+            (precision_macro, recall_macro, f1_macro), (precision_micro, recall_micro, f1_micro)= np.round(f1_m(np.array(adata.obs[label_name]), np.array(y_pre)), 5) 
+            print('--------------------')
+            print('F1 score: f1_macro = {}, f1_micro = {}'.format(f1_macro, f1_micro))
+            print('precision score: precision_macro = {}, precision_micro = {}'.format(precision_macro, precision_micro))
+            print('recall score: recall_macro = {}, recall_micro = {}'.format(recall_macro, recall_micro))
+
+
+            for value in set(adata.obs['broad_cell_type_2']):
+                y_pree, y_true = y_pre[adata.obs['broad_cell_type_2']==value], adata.obs[label_name][adata.obs['broad_cell_type_2']==value]
+
+                print(value+'-------------'+str(len(y_true)/len(y_pre)))
+                print('ACC: {}'.format(len(y_pree[y_pree==y_true])/len(y_pree)))
 
             test_dataset = MyDataSet(expdata, data_norm)
             data_loader = torch.utils.data.DataLoader(test_dataset,
@@ -289,16 +300,17 @@ def fit_model(adata, gmt_path, project = None, pre_weights='', label_name='Cellt
                                         device=device,
                                         epoch=epoch)
             print(train_loss)
-    #    scheduler.step() 
-        tags = ["train_loss", "train_acc", "val_loss", "val_acc", "learning_rate"]
-        tb_writer.add_scalar(tags[0], train_loss, epoch)
-        tb_writer.add_scalar(tags[1], train_acc, epoch)
-        # tb_writer.add_scalar(tags[2], val_loss, epoch)
-        # tb_writer.add_scalar(tags[3], val_acc, epoch)
-        tb_writer.add_scalar(tags[4], optimizer.param_groups[0]["lr"], epoch)
-        if epoch == epochs-1:
-            if platform.system().lower() == 'windows':
-                torch.save(model.state_dict(), project_path+"/model-{}.pth_fin".format(epoch))
-            else:
-                torch.save(model.state_dict(), "/%s"%project_path+"/model-{}.pth_fin".format(epoch))
+            scheduler.step() 
+            tags = ["train_loss", "train_acc", "val_loss", "val_acc", "learning_rate"]
+            tb_writer.add_scalar(tags[0], train_loss, epoch)
+            tb_writer.add_scalar(tags[1], train_acc, epoch)
+            tb_writer.add_scalar(tags[4], optimizer.param_groups[0]["lr"], epoch)
+
+
+            if epoch == 29:
+                if platform.system().lower() == 'windows':
+                    torch.save(model.state_dict(), project_path+"/model-{}.pth".format(epoch))
+                else:
+                    torch.save(model.state_dict(), "/%s"%project_path+"/model-{}.pth".format(epoch))
     print('Training finished!')
+    print(time.time() - since)

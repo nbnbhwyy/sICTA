@@ -62,14 +62,14 @@ class MyDataSet(Dataset):
     def __len__(self):
         return self.len
     
-def prediect(adata,model_weight_path,project,mask_path,laten=False,save_att = 'X_att', save_lantent = 'X_lat',n_step=50000,cutoff=0.0,n_unannotated = 1,batch_size = 64,embed_dim=100,depth=2,num_heads=4):
+def prediect(adata,model_weight_path, project,mask_path,laten=False,current_path = None,save_att = 'X_att', save_lantent = 'X_lat',n_step=50000,cutoff=0.0,n_unannotated = 1,batch_size = 64,embed_dim=100,depth=2,num_heads=4):
     device = torch.device("cuda:2" if torch.cuda.is_available() else "cpu")
     print(device)
     num_genes = adata.shape[1]
     mask = np.load(mask_path)
-    project_path = os.getcwd()+'/%s'%project
-    pathway = pd.read_csv(project_path+'/pathway_fin.csv', index_col=0)
-    dictionary = pd.read_table(project_path+'/label_dictionary_fin.csv', sep=',',header=0,index_col=0)
+    project_path = current_path+'/%s'%project
+    pathway = pd.read_csv(project_path+'/pathway.csv', index_col=0)
+    dictionary = pd.read_table(project_path+'/label_dictionary.csv', sep=',',header=0,index_col=0)
     n_c = len(dictionary)
     label_name = dictionary.columns[0]
     dictionary.loc[(dictionary.shape[0])] = 'Unknown'

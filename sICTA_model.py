@@ -116,7 +116,7 @@ class Block(nn.Module):
         return x, weights
 
 def get_weight(att_mat):
-    device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda:2" if torch.cuda.is_available() else "cpu")
     att_mat = torch.stack(att_mat).squeeze(1)
     #print(att_mat.size())
     # Average the attention weights across all heads.
